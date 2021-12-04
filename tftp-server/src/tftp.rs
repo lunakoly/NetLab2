@@ -22,9 +22,28 @@ pub fn to_error_code_index(error_code: &ErrorCode) -> u16 {
 }
 
 #[derive(Debug, Clone)]
+pub enum Mode {
+    NetAscii,
+    Octet,
+    Mail,
+    Other(String),
+}
+
+impl Mode {
+    pub fn to_string(&self) -> String {
+        match self {
+            Mode::NetAscii => "netascii".to_owned(),
+            Mode::Octet => "octet".to_owned(),
+            Mode::Mail => "mail".to_owned(),
+            Mode::Other(it) => it.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub enum Packet {
-    Rrq { filename: String, mode: String },
-    Wrq { filename: String, mode: String },
+    Rrq { filename: String, mode: Mode },
+    Wrq { filename: String, mode: Mode },
     Data { block: u16, data: Vec<u8> },
     Ack { block: u16 },
     Error { error_code: ErrorCode, error_message: String },
@@ -51,6 +70,10 @@ pub fn serialize_string<W: Write>(string: &str, mut output: W) -> Result<()> {
     Ok(())
 }
 
+pub fn serialize_mode<W: Write>(mode: &Mode, output: W) -> Result<()> {
+    serialize_string(&mode.to_string(), output)
+}
+
 pub fn serialize_error_code<W: Write>(error_code: &ErrorCode, mut output: W) -> Result<()> {
     output.write_all(&to_error_code_index(error_code).to_be_bytes())?;
     Ok(())
@@ -64,11 +87,11 @@ pub fn to_bytes(packet: &Packet) -> Result<Vec<u8>> {
     match packet {
         Packet::Rrq { filename, mode } => {
             serialize_string(filename, &mut buffer)?;
-            serialize_string(mode, &mut buffer)?;
+            serialize_mode(mode, &mut buffer)?;
         }
         Packet::Wrq { filename, mode } => {
             serialize_string(filename, &mut buffer)?;
-            serialize_string(mode, &mut buffer)?;
+            serialize_mode(mode, &mut buffer)?;
         }
         Packet::Data { block, data } => {
             buffer.write_all(&block.to_be_bytes())?;
@@ -139,6 +162,20 @@ fn deserialize_string(caret: &mut Caret<u8>) -> Result<String> {
     Ok(string)
 }
 
+fn deserialize_mode(caret: &mut Caret<u8>) -> Result<Mode> {
+    let string = deserialize_string(caret)?.to_lowercase();
+
+    if string == "netascii" {
+        Ok(Mode::NetAscii)
+    } else if string == "octet" {
+        Ok(Mode::Octet)
+    } else if string == "mail" {
+        Ok(Mode::Mail)
+    } else {
+        Ok(Mode::Other(string))
+    }
+}
+
 fn deserialize_error_code(caret: &mut Caret<u8>) -> Result<ErrorCode> {
     let code = deserialize_u16(caret)?;
 
@@ -166,12 +203,12 @@ pub fn from_bytes(packet: &[u8]) -> Result<Packet> {
     let packet = match opcode {
         1 => {
             let filename = deserialize_string(&mut caret)?;
-            let mode = deserialize_string(&mut caret)?;
+            let mode = deserialize_mode(&mut caret)?;
             Packet::Rrq { filename, mode }
         }
         2 => {
             let filename = deserialize_string(&mut caret)?;
-            let mode = deserialize_string(&mut caret)?;
+            let mode = deserialize_mode(&mut caret)?;
             Packet::Wrq { filename, mode }
         }
         3 => {

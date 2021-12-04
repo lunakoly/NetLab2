@@ -22,14 +22,14 @@ enum Task {
     },
     Reader {
         send_queue: Vec<tftp::Packet>,
-        mode: String,
+        mode: tftp::Mode,
         tid: SocketAddr,
         file: File,
         size: u64
     },
     Writer {
         send_queue: Vec<tftp::Packet>,
-        mode: String,
+        mode: tftp::Mode,
         tid: SocketAddr,
         file: File
     },
@@ -199,6 +199,13 @@ fn access_violation_packet() -> tftp::Packet {
     }
 }
 
+fn unsupported_mode_packet(mode: &tftp::Mode) -> tftp::Packet {
+    tftp::Packet::Error {
+        error_code: tftp::ErrorCode::IllegalOperation,
+        error_message: format!("Mode '{}' is not supported", mode.to_string())
+    }
+}
+
 fn read_chunk(file: &mut File, size: u64) -> Result<Vec<u8>> {
     let mut buffer = [0u8; tftp::MAX_DATA_SIZE];
     let written = file.stream_position()?;
@@ -215,11 +222,16 @@ fn read_chunk(file: &mut File, size: u64) -> Result<Vec<u8>> {
 
 fn handle_read_request(
     filename: &str,
-    mode: &str,
+    mode: &tftp::Mode,
     address: SocketAddr,
     connection: Shared<Connection>,
     context: &mut Context,
 ) -> Result<()> {
+    if !matches!(mode, tftp::Mode::Octet) {
+        connection.write()?.send_as_main(unsupported_mode_packet(mode), address)?;
+        return Ok(())
+    }
+
     if !Path::new(filename).exists() {
         connection.write()?.send_as_main(file_not_found_packet(), address)?;
         return Ok(())
@@ -261,11 +273,16 @@ fn handle_read_request(
 
 fn handle_write_request(
     filename: &str,
-    mode: &str,
+    mode: &tftp::Mode,
     address: SocketAddr,
     connection: Shared<Connection>,
     context: &mut Context,
 ) -> Result<()> {
+    if !matches!(mode, tftp::Mode::Octet) {
+        connection.write()?.send_as_main(unsupported_mode_packet(mode), address)?;
+        return Ok(())
+    }
+
     if Path::new(filename).exists() {
         connection.write()?.send_as_main(file_exists_packet(), address)?;
         return Ok(())
@@ -455,9 +472,19 @@ fn handle_incomming(
     }
 
     let (size, address) = result?;
-    let packet = tftp::from_bytes(&buffer[..size])?;
+    let maybe_bytes = tftp::from_bytes(&buffer[..size]);
 
-    handle_datagram(packet, address, connection, context)?;
+    match maybe_bytes {
+        Ok(packet) => {
+            handle_datagram(packet, address, connection, context)?;
+        }
+        Err(error) => {
+            connection.write()?.send_as_main(illegal_packet(), address)?;
+            println!("Error > {} > {}", &address, error);
+            drop_connection(connection)?;
+        }
+    }
+
     Ok(true)
 }
 
