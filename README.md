@@ -12,7 +12,7 @@ cargo build
 ## Run
 
 ```bash
-cargo run -p <package>
+cargo run -p tftp-server
 ```
 
 Servers are expected to be stopped via `Ctrl-C`.
