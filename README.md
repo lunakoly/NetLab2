@@ -39,7 +39,7 @@ This works on macOS:
 ```bash
 $ tftp <host>
 tftp> get <file> <name-for-saving-locally>
-tftp> put <file> <name-for-saving-locally>
+tftp> put <file>
 ```
 
 And switch modes via:
