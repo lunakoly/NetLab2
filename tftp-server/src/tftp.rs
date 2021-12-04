@@ -38,6 +38,14 @@ impl Mode {
             Mode::Other(it) => it.clone(),
         }
     }
+
+    pub fn is_supported(&self) -> bool {
+        match self {
+            Mode::NetAscii => true,
+            Mode::Octet => true,
+            _ => false,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

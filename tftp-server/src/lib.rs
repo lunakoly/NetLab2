@@ -206,6 +206,49 @@ fn unsupported_mode_packet(mode: &tftp::Mode) -> tftp::Packet {
     }
 }
 
+#[allow(dead_code)]
+const LINE_FEED: u8 = 10;
+#[allow(dead_code)]
+const CARRIAGE_RETURN: u8 = 13;
+
+fn read_chunk_as_netascii(file: &mut File, size: u64) -> Result<Vec<u8>> {
+    let mut buffer = [0u8; tftp::MAX_DATA_SIZE];
+    let mut next_buffer = [0u8; 1];
+    let mut index = 0;
+
+    while index < tftp::MAX_DATA_SIZE && file.stream_position()? < size {
+        file.read_exact(&mut next_buffer)?;
+        let next = next_buffer[0];
+
+        #[cfg(unix)] {
+            if next == LINE_FEED {
+                buffer[index] = CARRIAGE_RETURN;
+                index += 1;
+                buffer[index] = LINE_FEED;
+                index += 1;
+                continue
+            }
+        }
+
+        #[cfg(windows)] {
+            if next == LINE_FEED || next == CARRIAGE_RETURN {
+                buffer[index] = next;
+                index += 1;
+                continue
+            }
+        }
+
+        if !(0x20..=0x7F).contains(&next) {
+            continue
+        }
+
+        buffer[index] = next;
+        index += 1;
+    }
+
+    Ok(buffer[..index].to_vec())
+}
+
 fn read_chunk(file: &mut File, size: u64) -> Result<Vec<u8>> {
     let mut buffer = [0u8; tftp::MAX_DATA_SIZE];
     let written = file.stream_position()?;
@@ -227,7 +270,7 @@ fn handle_read_request(
     connection: Shared<Connection>,
     context: &mut Context,
 ) -> Result<()> {
-    if !matches!(mode, tftp::Mode::Octet) {
+    if !mode.is_supported() {
         connection.write()?.send_as_main(unsupported_mode_packet(mode), address)?;
         return Ok(())
     }
@@ -240,7 +283,16 @@ fn handle_read_request(
     let mut file = File::open(filename)?;
     let size = file.metadata()?.len();
 
-    let data = match read_chunk(&mut file, size) {
+    let maybe_chunk = match mode {
+        tftp::Mode::NetAscii => read_chunk_as_netascii(&mut file, size),
+        tftp::Mode::Octet => read_chunk(&mut file, size),
+        _ => {
+            connection.write()?.send_as_main(unsupported_mode_packet(mode), address)?;
+            return Ok(())
+        }
+    };
+
+    let data = match maybe_chunk {
         Ok(it) => it,
         Err(error) => {
             connection.write()?.send_as_main(file_not_found_packet(), address)?;
@@ -278,7 +330,7 @@ fn handle_write_request(
     connection: Shared<Connection>,
     context: &mut Context,
 ) -> Result<()> {
-    if !matches!(mode, tftp::Mode::Octet) {
+    if !mode.is_supported() {
         connection.write()?.send_as_main(unsupported_mode_packet(mode), address)?;
         return Ok(())
     }
@@ -317,6 +369,23 @@ fn handle_write_request(
     Ok(())
 }
 
+fn write_as_netascii(
+    file: &mut File,
+    buffer: &[u8],
+) -> std::io::Result<()> {
+    for it in buffer {
+        #[cfg(unix)] {
+            if it == CARRIAGE_RETURN {
+                continue
+            }
+        }
+
+        file.write(&[it.clone()])?;
+    }
+
+    Ok(())
+}
+
 fn handle_data(
     block: u16,
     data: &Vec<u8>,
@@ -326,12 +395,12 @@ fn handle_data(
     let last_packet = locked.last_packet.clone();
 
     let maybe_info = match &mut locked.task {
-        Task::Writer { file, tid, .. } => Some((file, tid)),
+        Task::Writer { file, tid, mode, .. } => Some((file, tid, mode)),
         _ => None,
     };
 
-    let (file, tid) = if let Some((file, tid)) = maybe_info {
-        (file, tid.clone())
+    let (file, tid, mode) = if let Some((file, tid, mode)) = maybe_info {
+        (file, tid.clone(), mode.clone())
     } else {
         locked.send_as_non_main(illegal_packet())?;
         return Ok(())
@@ -351,7 +420,16 @@ fn handle_data(
         }
     }
 
-    if let Err(error) = file.write_all(&data) {
+    let result = match mode {
+        tftp::Mode::NetAscii => write_as_netascii(file, data),
+        tftp::Mode::Octet => file.write_all(&data),
+        _ => {
+            connection.write()?.send_as_main(unsupported_mode_packet(&mode), tid)?;
+            return Ok(())
+        }
+    };
+
+    if let Err(error) = result {
         locked.send_as_main(access_violation_packet(), tid.clone())?;
         println!("Write Error > {:?} > {}", tid, error);
         return Ok(())
