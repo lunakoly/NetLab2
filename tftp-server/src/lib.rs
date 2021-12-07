@@ -375,7 +375,7 @@ fn write_as_netascii(
 ) -> std::io::Result<()> {
     for it in buffer {
         #[cfg(unix)] {
-            if it == CARRIAGE_RETURN {
+            if it == &CARRIAGE_RETURN {
                 continue
             }
         }
