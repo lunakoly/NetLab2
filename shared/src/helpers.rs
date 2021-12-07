@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 pub mod shared;
+pub mod caret;
 
 use std::str::{from_utf8, from_utf8_unchecked};
 

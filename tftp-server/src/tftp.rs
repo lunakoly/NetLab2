@@ -1,8 +1,16 @@
 use std::io::{Write};
 
 use shared::{Result, ErrorKind};
+use shared::helpers::caret::{Caret};
 
-pub const DEFAULT_PORT: u32 = 69;
+use shared::serialization::{
+    serialize_string,
+    deserialize_string,
+    serialize_u16,
+    deserialize_u16,
+};
+
+pub const DEFAULT_PORT: u32 = 6969;
 pub const MAX_DATA_SIZE: usize = 512;
 
 #[derive(Debug, Clone)]
@@ -67,15 +75,8 @@ pub fn to_opcode(packet: &Packet) -> u16 {
     }
 }
 
-pub fn serialize_opcode<W: Write>(packet: &Packet, mut output: W) -> Result<()> {
-    output.write_all(&to_opcode(packet).to_be_bytes())?;
-    Ok(())
-}
-
-pub fn serialize_string<W: Write>(string: &str, mut output: W) -> Result<()> {
-    output.write_all(string.as_bytes())?;
-    output.write_all(&[0u8])?;
-    Ok(())
+pub fn serialize_opcode<W: Write>(packet: &Packet, output: W) -> Result<()> {
+    serialize_u16(to_opcode(packet), output)
 }
 
 pub fn serialize_mode<W: Write>(mode: &Mode, output: W) -> Result<()> {
@@ -115,59 +116,6 @@ pub fn to_bytes(packet: &Packet) -> Result<Vec<u8>> {
     }
 
     Ok(buffer)
-}
-
-struct Caret<'a, T> {
-    pub slice: &'a [T],
-}
-
-impl<'a, T: Copy> Caret<'a, T> {
-    pub fn next(&self) -> T {
-        self.slice[0]
-    }
-}
-
-macro_rules! take {
-    ( 1, $caret:expr ) => {
-        {
-            let first = $caret.slice[0];
-            $caret.slice = &$caret.slice[1..];
-            first
-        }
-    };
-    ( $count:expr, $caret:expr ) => {
-        {
-            let mut part = [0u8; $count];
-
-            for it in 0..$count {
-                part[it] = $caret.slice[it];
-            }
-
-            $caret.slice = &$caret.slice[$count..];
-            part
-        }
-    };
-}
-
-fn deserialize_u16(caret: &mut Caret<u8>) -> Result<u16> {
-    if caret.slice.len() < 2 {
-        return ErrorKind::UnsupportedFormat {
-            message: format!("Couldn't deserialize a u16")
-        }.into()
-    }
-
-    Ok(u16::from_be_bytes(take!(2, caret)))
-}
-
-fn deserialize_string(caret: &mut Caret<u8>) -> Result<String> {
-    let mut string = String::new();
-
-    while caret.next() != 0 {
-        string.push(take!(1, caret) as char);
-    }
-
-    take!(1, caret);
-    Ok(string)
 }
 
 fn deserialize_mode(caret: &mut Caret<u8>) -> Result<Mode> {

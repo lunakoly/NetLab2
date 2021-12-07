@@ -1,3 +1,4 @@
+pub mod serialization;
 pub mod helpers;
 pub mod errors;
 
