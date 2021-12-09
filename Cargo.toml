@@ -9,7 +9,9 @@ edition = "2021"
 members = [
     "shared",
     "tftp-server",
+    "dhcp-client",
 ]
 
 [dependencies]
 tftp-server = { path = "tftp-server" }
+dhcp-client = { path = "dhcp-client" }
