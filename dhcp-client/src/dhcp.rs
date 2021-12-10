@@ -42,13 +42,13 @@ pub enum OperationCode {
 
 #[derive(Debug, Clone)]
 pub struct Flags {
-    inner: u16,
+    pub b: bool,
 }
 
 impl Flags {
-    pub fn b(&self) -> bool {
-        (self.inner & (1 << 15)) != 0
-    }
+    // pub fn b(&self) -> bool {
+    //     (self.inner & (1 << 15)) != 0
+    // }
 }
 
 #[derive(Debug, Clone)]
@@ -70,7 +70,8 @@ pub enum Option {
     // Router { addresses: Vec<u32> },
     // DomainNameServer { addresses: Vec<u32> },
     // StaticRoutingTable { map: Vec<(u32, u32)> },
-    // IpAddressLeaseTime { time: u32 },
+    RequestedIpAddress { address: u32 },
+    IpAddressLeaseTime { time: u32 },
     // DhcpMessageType { value: MessageType },
     // ParameterRequestList { codes: Vec<u8> },
     // ClassIdentifier { info: Vec<u8> },
@@ -102,7 +103,8 @@ pub struct Message {
     pub options: Vec<Option>,
 }
 
-pub const DEFAULT_PORT: u32 = 69;
+pub const DEFAULT_SERVER_PORT: u16 = 67;
+pub const DEFAULT_CLIENT_PORT: u16 = 68;
 
 fn serialize_op<W: Write>(op: &OperationCode, output: W) -> Result<()> {
     let id = match op {
@@ -113,25 +115,37 @@ fn serialize_op<W: Write>(op: &OperationCode, output: W) -> Result<()> {
     serialize_u8(id, output)
 }
 
-fn serialize_htype<W: Write>(value: &Htype, mut output: W) -> Result<()> {
-    // See: RFC 1700 «Assigned Numbers»
-    serialize_u8(1, output)
+fn serialize_htype<W: Write>(value: &Htype, output: W) -> Result<()> {
+    match value {
+        // See: RFC 1700 «Assigned Numbers»
+        Htype::EthernetMac => serialize_u8(1, output),
+    }
 }
 
 fn serialize_flags<W: Write>(flags: &Flags, output: W) -> Result<()> {
-    serialize_u16(flags.inner, output)
+    serialize_u16(u16::from(flags.b) << 15, output)
 }
 
 fn serialize_option<W: Write>(option: &Option, mut output: W) -> Result<()> {
     match option {
         Option::Pad => {
-            serialize_u8(0, output)?;
+            serialize_u8(0, &mut output)?;
+        }
+        Option::RequestedIpAddress { address } => {
+            serialize_u8(50, &mut output)?;
+            serialize_u8(4, &mut output)?;
+            serialize_u32(address.clone(), &mut output)?;
+        }
+        Option::IpAddressLeaseTime { time } => {
+            serialize_u8(51, &mut output)?;
+            serialize_u8(4, &mut output)?;
+            serialize_u32(time.clone(), &mut output)?;
         }
         Option::End => {
-            serialize_u8(255, output)?;
+            serialize_u8(255, &mut output)?;
         }
         Option::Other { code, data } => {
-            serialize_u8(code.clone(), &mut output)?;
+            serialize_u8(code.clone(), &mut &mut output)?;
             output.write_all(data)?;
         }
         // Option::SubnetMask { mask } => {
@@ -140,7 +154,7 @@ fn serialize_option<W: Write>(option: &Option, mut output: W) -> Result<()> {
         // }
         // Option::Router { addresses } => {
         //     serialize_u8(3, output)?;
-            
+
         // },
         // Option::DomainNameServer => 6,
         // Option::StaticRoutingTable => 33,
@@ -169,7 +183,7 @@ fn serialize_options<W: Write>(options: &[Option], mut output: W) -> Result<()> 
         serialize_option(it, &mut output)?;
     }
 
-    Ok(())
+    serialize_option(&Option::End, &mut output)
 }
 
 pub fn to_bytes(message: &Message) -> Result<Vec<u8>> {
@@ -190,20 +204,20 @@ pub fn to_bytes(message: &Message) -> Result<Vec<u8>> {
 
     buffer.write_all(&message.sname)?;
     buffer.write_all(&message.file)?;
-    
+
     serialize_options(&message.options, &mut buffer)?;
 
     Ok(buffer)
 }
 
 fn deserialize_op(caret: &mut Caret<u8>) -> Result<OperationCode> {
-    let code = deserialize_u16(caret)?;
+    let code = deserialize_u8(caret)?;
 
     let it = match code {
         1 => OperationCode::BootRequest,
         2 => OperationCode::BootReply,
-        _ => return ErrorKind::UnsupportedFormat {
-            message: format!("Invalid op format")
+        it => return ErrorKind::UnsupportedFormat {
+            message: format!("Invalid op format > {:?}", it)
         }.into()
     };
 
@@ -222,11 +236,60 @@ fn deserialize_htype(caret: &mut Caret<u8>) -> Result<Htype> {
 }
 
 fn deserialize_flags(caret: &mut Caret<u8>) -> Result<Flags> {
+    let inner = deserialize_u16(caret)?;
+
     let flags = Flags {
-        inner: deserialize_u16(caret)?,
+        b: (inner >> 15) != 0,
     };
 
     Ok(flags)
+}
+
+fn deserialize_option(caret: &mut Caret<u8>) -> Result<Option> {
+    if !caret.has_next() {
+        return ErrorKind::UnsupportedFormat {
+            message: format!("Not enught bytes to parse an option")
+        }.into()
+    }
+
+    let option = match take!(1, caret) {
+        0 => Option::Pad,
+        50 => {
+            deserialize_u8(caret)?;
+            Option::RequestedIpAddress {
+                address: deserialize_u32(caret)?
+            }
+        }
+        51 => {
+            deserialize_u8(caret)?;
+            Option::IpAddressLeaseTime {
+                time: deserialize_u32(caret)?
+            }
+        }
+        255 => Option::End,
+        code => {
+            let length = deserialize_u8(caret)? as usize;
+            Option::Other {
+                code: code,
+                data: caret.take(length)?
+            }
+        }
+        // 3 => Option::Router,
+        // 6 => Option::DomainNameServer,
+        // 33 => Option::StaticRoutingTable,
+        // 51 => Option::IpAddressLeaseTime,
+        // 53 => Option::DhcpMessageType,
+        // 55 => Option::ParameterRequestList,
+        // 60 => Option::ClassIdentifier,
+        // 61 => Option::ClientIdentifier,
+        // 66 => Option::TftpServerName,
+        // 67 => Option::BootfileName,
+        // 121 => Option::ClasslessStaticRouteOption,
+        // 150 => Option::TftpServerAddress,
+        // other => Option::Other { code: other },
+    };
+
+    Ok(option)
 }
 
 fn deserialize_options(caret: &mut Caret<u8>) -> Result<Vec<Option>> {
@@ -235,36 +298,18 @@ fn deserialize_options(caret: &mut Caret<u8>) -> Result<Vec<Option>> {
             message: "Magic cookie violation".to_owned()
         }.into()
     }
-    
+
     let mut options = vec![];
+    let mut is_end = false;
 
-    while caret.has_next() {
-        let option = match take!(1, caret) {
-            0 => Option::Pad,
-            255 => Option::End,
-            code => {
-                let length = deserialize_u8(caret)? as usize;
-                Option::Other {
-                    code: code,
-                    data: caret.take(length)?
-                }
-            },
-            // 3 => Option::Router,
-            // 6 => Option::DomainNameServer,
-            // 33 => Option::StaticRoutingTable,
-            // 51 => Option::IpAddressLeaseTime,
-            // 53 => Option::DhcpMessageType,
-            // 55 => Option::ParameterRequestList,
-            // 60 => Option::ClassIdentifier,
-            // 61 => Option::ClientIdentifier,
-            // 66 => Option::TftpServerName,
-            // 67 => Option::BootfileName,
-            // 121 => Option::ClasslessStaticRouteOption,
-            // 150 => Option::TftpServerAddress,
-            // other => Option::Other { code: other },
-        };
+    while !is_end && caret.has_next() {
+        let option = deserialize_option(caret)?;
 
-        options.push(option);
+        if let Option::End = option {
+            is_end = true;
+        } else {
+            options.push(option);
+        }
     }
 
     Ok(options)
