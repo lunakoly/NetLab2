@@ -56,23 +56,57 @@ pub enum MessageType {
     DhcpDiscover,
     DhcpOffer,
     DhcpRequest,
+    DhcpDecline,
     DhcpAck,
     DhcpNak,
-    DhcpDecline,
     DhcpRelease,
     DhcpInform,
+}
+
+impl MessageType {
+    fn to_number(&self) -> u8 {
+        match self {
+            MessageType::DhcpDiscover => 1,
+            MessageType::DhcpOffer => 2,
+            MessageType::DhcpRequest => 3,
+            MessageType::DhcpDecline => 4,
+            MessageType::DhcpAck => 5,
+            MessageType::DhcpNak => 6,
+            MessageType::DhcpRelease => 7,
+            MessageType::DhcpInform => 8,
+        }
+    }
+
+    fn from_number(it: u8) -> Result<MessageType> {
+        match it {
+            1 => Ok(MessageType::DhcpDiscover),
+            2 => Ok(MessageType::DhcpOffer),
+            3 => Ok(MessageType::DhcpRequest),
+            4 => Ok(MessageType::DhcpDecline),
+            5 => Ok(MessageType::DhcpAck),
+            6 => Ok(MessageType::DhcpNak),
+            7 => Ok(MessageType::DhcpRelease),
+            8 => Ok(MessageType::DhcpInform),
+            _ => ErrorKind::UnsupportedFormat {
+                message: format!("Uknown DHCP Message Type > {}", it)
+            }.into()
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
 pub enum Option {
     Pad,
-    // SubnetMask { mask: u32 },
+    SubnetMask { mask: u32 },
     // Router { addresses: Vec<u32> },
     // DomainNameServer { addresses: Vec<u32> },
     // StaticRoutingTable { map: Vec<(u32, u32)> },
     RequestedIpAddress { address: u32 },
     IpAddressLeaseTime { time: u32 },
-    // DhcpMessageType { value: MessageType },
+    DhcpMessageType { value: MessageType },
+    ServerIdentifier { address: u32 },
+    RenewalTimeValue { time: u32 },
+    RebindingTimeValue { time: u32 },
     // ParameterRequestList { codes: Vec<u8> },
     // ClassIdentifier { info: Vec<u8> },
     // ClientIdentifier { value: Vec<u8> },
@@ -131,6 +165,11 @@ fn serialize_option<W: Write>(option: &Option, mut output: W) -> Result<()> {
         Option::Pad => {
             serialize_u8(0, &mut output)?;
         }
+        Option::SubnetMask { mask } => {
+            serialize_u8(1, &mut output)?;
+            serialize_u8(4, &mut output)?;
+            serialize_u32(mask.clone(), &mut output)?;
+        }
         Option::RequestedIpAddress { address } => {
             serialize_u8(50, &mut output)?;
             serialize_u8(4, &mut output)?;
@@ -138,6 +177,26 @@ fn serialize_option<W: Write>(option: &Option, mut output: W) -> Result<()> {
         }
         Option::IpAddressLeaseTime { time } => {
             serialize_u8(51, &mut output)?;
+            serialize_u8(4, &mut output)?;
+            serialize_u32(time.clone(), &mut output)?;
+        }
+        Option::DhcpMessageType { value } => {
+            serialize_u8(53, &mut output)?;
+            serialize_u8(1, &mut output)?;
+            serialize_u8(value.to_number(), &mut output)?;
+        }
+        Option::ServerIdentifier { address } => {
+            serialize_u8(54, &mut output)?;
+            serialize_u8(4, &mut output)?;
+            serialize_u32(address.clone(), &mut output)?;
+        }
+        Option::RenewalTimeValue { time } => {
+            serialize_u8(58, &mut output)?;
+            serialize_u8(4, &mut output)?;
+            serialize_u32(time.clone(), &mut output)?;
+        }
+        Option::RebindingTimeValue { time } => {
+            serialize_u8(59, &mut output)?;
             serialize_u8(4, &mut output)?;
             serialize_u32(time.clone(), &mut output)?;
         }
@@ -207,6 +266,10 @@ pub fn to_bytes(message: &Message) -> Result<Vec<u8>> {
 
     serialize_options(&message.options, &mut buffer)?;
 
+    while buffer.len() & 0b1111 != 0 {
+        serialize_option(&Option::Pad, &mut buffer)?;
+    }
+
     Ok(buffer)
 }
 
@@ -254,6 +317,12 @@ fn deserialize_option(caret: &mut Caret<u8>) -> Result<Option> {
 
     let option = match take!(1, caret) {
         0 => Option::Pad,
+        1 => {
+            deserialize_u8(caret)?;
+            Option::SubnetMask {
+                mask: deserialize_u32(caret)?
+            }
+        }
         50 => {
             deserialize_u8(caret)?;
             Option::RequestedIpAddress {
@@ -263,6 +332,30 @@ fn deserialize_option(caret: &mut Caret<u8>) -> Result<Option> {
         51 => {
             deserialize_u8(caret)?;
             Option::IpAddressLeaseTime {
+                time: deserialize_u32(caret)?
+            }
+        }
+        53 => {
+            deserialize_u8(caret)?;
+            Option::DhcpMessageType {
+                value: MessageType::from_number(deserialize_u8(caret)?)?
+            }
+        }
+        54 => {
+            deserialize_u8(caret)?;
+            Option::ServerIdentifier {
+                address: deserialize_u32(caret)?
+            }
+        }
+        58 => {
+            deserialize_u8(caret)?;
+            Option::RenewalTimeValue {
+                time: deserialize_u32(caret)?
+            }
+        }
+        59 => {
+            deserialize_u8(caret)?;
+            Option::RebindingTimeValue {
                 time: deserialize_u32(caret)?
             }
         }
@@ -307,6 +400,8 @@ fn deserialize_options(caret: &mut Caret<u8>) -> Result<Vec<Option>> {
 
         if let Option::End = option {
             is_end = true;
+        } else if let Option::Pad = option {
+            // Chill
         } else {
             options.push(option);
         }
