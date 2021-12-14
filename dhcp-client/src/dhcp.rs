@@ -1,6 +1,3 @@
-pub mod persistency;
-pub mod addresses;
-
 use std::io::{Write};
 
 use shared::{Result, ErrorKind};
@@ -135,6 +132,19 @@ pub struct Message {
     pub sname: [u8; 64],
     pub file: [u8; 128],
     pub options: Vec<Option>,
+}
+
+pub fn extract_message_type(message: &Message) -> std::option::Option<MessageType> {
+    for it in &message.options {
+        match it {
+            Option::DhcpMessageType { value } => {
+                return Some(value.clone());
+            }
+            _ => {}
+        }
+    }
+
+    None
 }
 
 pub const DEFAULT_SERVER_PORT: u16 = 67;
