@@ -16,6 +16,7 @@ use shared::{
 use shared::shared::{IntoShared, Shared};
 
 #[derive(Debug)]
+#[allow(dead_code)]
 enum Task {
     Main {
         send_queue: Vec<(tftp::Packet, SocketAddr)>
