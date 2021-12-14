@@ -68,10 +68,39 @@ The implementation is minimal, and therefore only supports the acquisition of an
 
 As can be seen in the `lib.rs` file, only the `Init`, `Selecting`, `Requesting`, `Rebinding`, `Bound` and `Renewing` states are supported.
 
+The ability to use the `sname` and the `file` fields as options is not supported.
+
 The client has been verified against a real Apple AirPort Express router.
+
+#### Notes
+
+Rust's stdlib has no API for working with raw sockets, so a third-party crate must be used. I used `pnet`: it allows capturing Ethernet frames, but we then have to "unwrap" them payload by payload. It also means that we have to manually wrap our DHCP messages with UDP, Ipv4 and Ethernet packets one after another before we can finally send it somewhere.
+
+The _DHCP Message Type_ option must always be present. This is the way DHCP messages are identified and not misinterpreted as BOOTP messages.
+
+The second client request - `DHCPREQUEST` - must contain the _Requested IP address_ and the _Server identifier_ options. _Requested IP address_ must contain the value of the `yiaddr` field (and the client request must leave this field 0). _Server identifier_ must contain the IP address of the DHCP server (the server's `DHCPOFFER` contains such an option, we can easily take it from there).
+
+The server's `DHCPACK` contains 3 key options: the _Renewal time value_ < the _Rebinding time value_ < the _IP address lease time_.
+
+The client renewal `DHCPREQUEST` must include the _Server identifier_. This message may be both broadcasted or sent directly to the server according to their mac & ip addresses.
+
+So, in total the must-support options are:
+- _Pad_
+- _Server identifier_
+- _Requested IP address_
+- _Renewal time value_
+- _Rebinding time value_
+- _IP address lease time_
+- _End_
+
+My other devices use the _Pad_ option to fill the options field until its size is aligned within 16 bytes, and so does this client.
 
 ## Links
 
 * Formal requirements: https://insysnw.github.io/practice/hw/udp-real-protocol/
 * TFTP RFC1350: https://datatracker.ietf.org/doc/html/rfc1350
 * About NetAscii: https://stackoverflow.com/questions/10936478/handling-netascii-in-java
+* DHCP RFC2131: https://datatracker.ietf.org/doc/html/rfc2131
+* BOOTP Vendor Extensions (options format): https://datatracker.ietf.org/doc/html/rfc1497
+* List of all DHCP options: https://datatracker.ietf.org/doc/html/rfc2132
+* BOOTP RFC951 (message format): https://datatracker.ietf.org/doc/html/rfc951
