@@ -8,6 +8,7 @@ pub enum ErrorKind {
     PoisonedLock { message: String },
     SendError { message: String },
     SystemTime { source: std::time::SystemTimeError },
+    Configuration { message: String },
 }
 
 impl std::fmt::Display for ErrorKind {
@@ -36,6 +37,9 @@ impl std::fmt::Display for ErrorKind {
             }
             ErrorKind::SystemTime { source } => {
                 write!(formatter, "System time > {}", source)
+            }
+            ErrorKind::Configuration { message } => {
+                write!(formatter, "Incorrect configuration > {}", message)
             }
         }
     }
