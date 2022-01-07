@@ -1,4 +1,4 @@
-# Rust UDP Example
+# Home Assignment #2
 ## About
 
 This repository contains sample implementations of some UDP protocols in Rust (a university home assignment).
